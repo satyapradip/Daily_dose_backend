@@ -1,0 +1,151 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────
+
+enum VibeType {
+  SARCASTIC
+  DRAMATIC
+  CONSPIRACY
+  AUNTY
+}
+
+enum Category {
+  TECH
+  CULTURE
+  WORLD
+  VIRAL
+  SCIENCE
+  FINANCE
+}
+
+enum InteractionType {
+  SWIPE_LEFT
+  SWIPE_RIGHT
+  SAVED
+  VOICE_PLAYED
+  EXPANDED
+  REACTED
+  SHARED
+}
+
+// ─────────────────────────────────────────────
+// Models
+// ─────────────────────────────────────────────
+
+model User {
+  id             String          @id @default(uuid())
+  email          String          @unique
+  username       String          @unique
+  passwordHash   String
+  selectedVibe   VibeType        @default(SARCASTIC)
+  streakCount    Int             @default(0)
+  lastActiveDate DateTime?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  preferences    UserPreference?
+  interactions   Interaction[]
+  savedCards     SavedCard[]
+}
+
+model UserPreference {
+  id                   String   @id @default(uuid())
+  userId               String   @unique
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  preferredCategories  String[]
+  dislikedCategories   String[]
+  preferredSources     String[]
+  readingSpeed         Float    @default(1.0)
+  notificationsOn      Boolean  @default(true)
+
+  // Computed preference scores (updated by preference engine)
+  techScore            Float    @default(0.5)
+  cultureScore         Float    @default(0.5)
+  worldScore           Float    @default(0.5)
+  viralScore           Float    @default(0.5)
+  scienceScore         Float    @default(0.5)
+  financeScore         Float    @default(0.5)
+
+  updatedAt            DateTime @updatedAt
+}
+
+model NewsCard {
+  id           String        @id @default(uuid())
+  externalId   String?       @unique
+  headline     String
+  summary      String
+  fullBody     String
+  source       String
+  sourceUrl    String
+  category     Category
+  imageUrl     String?
+  publishedAt  DateTime
+  scrapedAt    DateTime      @default(now())
+  trendScore   Float         @default(0)
+  isActive     Boolean       @default(true)
+  tags         String[]      @default([])
+
+  vibeContents VibeContent[]
+  interactions Interaction[]
+  savedBy      SavedCard[]
+}
+
+model VibeContent {
+  id          String   @id @default(uuid())
+  newsCardId  String
+  newsCard    NewsCard @relation(fields: [newsCardId], references: [id], onDelete: Cascade)
+  vibe        VibeType
+  crypticText String
+  generatedAt DateTime @default(now())
+
+  @@unique([newsCardId, vibe])
+}
+
+model Interaction {
+  id         String          @id @default(uuid())
+  userId     String
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  newsCardId String
+  newsCard   NewsCard        @relation(fields: [newsCardId], references: [id], onDelete: Cascade)
+  type       InteractionType
+  metadata   Json?
+  createdAt  DateTime        @default(now())
+
+  @@index([userId, newsCardId])
+  @@index([userId, createdAt])
+}
+
+model SavedCard {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  newsCardId String
+  newsCard   NewsCard @relation(fields: [newsCardId], references: [id], onDelete: Cascade)
+  savedAt    DateTime @default(now())
+
+  @@unique([userId, newsCardId])
+  @@index([userId])
+}
+
+model ScraperRun {
+  id           String   @id @default(uuid())
+  startedAt    DateTime @default(now())
+  completedAt  DateTime?
+  status       String   @default("RUNNING") // RUNNING, SUCCESS, FAILED
+  itemsFound   Int      @default(0)
+  itemsSaved   Int      @default(0)
+  errors       String[]
+  durationMs   Int?
+}
