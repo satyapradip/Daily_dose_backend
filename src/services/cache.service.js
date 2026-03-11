@@ -4,79 +4,146 @@ const { logger } = require("../utils/logger");
 
 class CacheService {
   constructor() {
+    this.available = false;
+
     this.client = new Redis(env.REDIS_URL, {
-      maxRetriesPerRequest: 3,
+      maxRetriesPerRequest: 1,
       lazyConnect: true,
       enableReadyCheck: true,
+      connectTimeout: 5000,
+      retryStrategy: (times) => {
+        // Stop retrying after 3 attempts; server should not crash without Redis
+        if (times > 3) return null;
+        return Math.min(times * 500, 2000);
+      },
     });
 
-    this.client.on("connect", () => logger.info("Redis connected"));
-    this.client.on("error", (err) =>
-      logger.error("Redis error:", { error: err.message }),
-    );
-    this.client.on("close", () => logger.warn("Redis connection closed"));
+    this.client.on("ready", () => {
+      this.available = true;
+      logger.info("Redis connected");
+    });
+    this.client.on("error", (err) => {
+      this.available = false;
+      logger.error("Redis error:", { error: err.message });
+    });
+    this.client.on("close", () => {
+      this.available = false;
+      logger.warn("Redis connection closed");
+    });
+
+    // Attempt connection but do not let failure crash the process
+    this.client.connect().catch((err) => {
+      logger.warn(`Redis unavailable – caching disabled: ${err.message}`);
+    });
   }
 
   async connect() {
+    if (!this.available) return;
     await this.client.connect();
   }
 
   async disconnect() {
+    if (!this.available) return;
     await this.client.quit();
   }
 
   async get(key) {
-    const value = await this.client.get(key);
-    if (!value) return null;
+    if (!this.available) return null;
     try {
-      return JSON.parse(value);
+      const value = await this.client.get(key);
+      if (!value) return null;
+      try {
+        return JSON.parse(value);
+      } catch {
+        return value;
+      }
     } catch {
-      return value;
+      return null;
     }
   }
 
   async set(key, value, ttlSeconds) {
-    const serialized = JSON.stringify(value);
-    if (ttlSeconds) {
-      await this.client.setex(key, ttlSeconds, serialized);
-    } else {
-      await this.client.set(key, serialized);
+    if (!this.available) return;
+    try {
+      const serialized = JSON.stringify(value);
+      if (ttlSeconds) {
+        await this.client.setex(key, ttlSeconds, serialized);
+      } else {
+        await this.client.set(key, serialized);
+      }
+    } catch {
+      // ignore cache write failures
     }
   }
 
   async del(key) {
-    await this.client.del(key);
+    if (!this.available) return;
+    try {
+      await this.client.del(key);
+    } catch {
+      /* ignore */
+    }
   }
 
   async exists(key) {
-    const result = await this.client.exists(key);
-    return result === 1;
+    if (!this.available) return false;
+    try {
+      const result = await this.client.exists(key);
+      return result === 1;
+    } catch {
+      return false;
+    }
   }
 
   async expire(key, ttlSeconds) {
-    await this.client.expire(key, ttlSeconds);
+    if (!this.available) return;
+    try {
+      await this.client.expire(key, ttlSeconds);
+    } catch {
+      /* ignore */
+    }
   }
 
   async ttl(key) {
-    return this.client.ttl(key);
+    if (!this.available) return -1;
+    try {
+      return this.client.ttl(key);
+    } catch {
+      return -1;
+    }
   }
 
   async acquireLock(key, ttlSeconds) {
-    const result = await this.client.set(key, "1", "EX", ttlSeconds, "NX");
-    return result === "OK";
+    if (!this.available) return true; // allow operation when cache is down
+    try {
+      const result = await this.client.set(key, "1", "EX", ttlSeconds, "NX");
+      return result === "OK";
+    } catch {
+      return true;
+    }
   }
 
   async releaseLock(key) {
-    await this.client.del(key);
+    if (!this.available) return;
+    try {
+      await this.client.del(key);
+    } catch {
+      /* ignore */
+    }
   }
 
   async deleteByPattern(pattern) {
-    const keys = await this.client.keys(pattern);
-    if (keys.length === 0) return 0;
-    const pipeline = this.client.pipeline();
-    keys.forEach((k) => pipeline.del(k));
-    await pipeline.exec();
-    return keys.length;
+    if (!this.available) return 0;
+    try {
+      const keys = await this.client.keys(pattern);
+      if (keys.length === 0) return 0;
+      const pipeline = this.client.pipeline();
+      keys.forEach((k) => pipeline.del(k));
+      await pipeline.exec();
+      return keys.length;
+    } catch {
+      return 0;
+    }
   }
 
   async getOrSet(key, fetcher, ttlSeconds) {
@@ -89,6 +156,7 @@ class CacheService {
   }
 
   async ping() {
+    if (!this.available) return false;
     try {
       const result = await this.client.ping();
       return result === "PONG";

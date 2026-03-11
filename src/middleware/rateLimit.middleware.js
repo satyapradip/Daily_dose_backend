@@ -1,6 +1,4 @@
 const rateLimit = require("express-rate-limit");
-const { RedisStore } = require("rate-limit-redis");
-const { cacheService } = require("../services/cache.service");
 const { env } = require("../config/env");
 
 function createLimiter(maxRequests, windowMs) {
@@ -9,9 +7,7 @@ function createLimiter(maxRequests, windowMs) {
     max: maxRequests,
     standardHeaders: true,
     legacyHeaders: false,
-    store: new RedisStore({
-      sendCommand: (...args) => cacheService.getClient().call(...args),
-    }),
+    // In-memory store — works without Redis, sufficient for single-instance deploy
     handler: (_req, res) => {
       res.status(429).json({
         success: false,

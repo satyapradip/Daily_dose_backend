@@ -4,6 +4,20 @@ const { ApiError } = require("../middleware/error.middleware");
 const { preferenceService } = require("../services/preference.service");
 const { VibeType } = require("@prisma/client");
 
+const newUser = asyncHandler(async (req, res) => {
+  const { email, username, password } = req.body;
+  const existingUser = await prisma.user.findUnique({ where: { email } });
+  if (existingUser) {
+    throw new ApiError("Email already in use", 400);
+  }
+  const user = await prisma.user.create({
+    data: { email, username, password },
+    select: { id: true, email: true, username: true, createdAt: true },
+  });
+  res.status(201).json({ success: true, data: user });
+});
+
+
 const getMe = asyncHandler(async (req, res) => {
   const user = await prisma.user.findUnique({
     where: { id: req.user.id },
@@ -62,6 +76,7 @@ const getStats = asyncHandler(async (req, res) => {
 });
 
 const userController = {
+  newUser,
   getMe,
   updateVibe,
   getPreferences,
